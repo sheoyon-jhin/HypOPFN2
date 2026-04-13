@@ -1,0 +1,48 @@
+# Data (too large for GitHub)
+dataset/
+*.arrow
+*.tsf
+*.npz
+*.npy
+
+# Checkpoints
+checkpoints/
+
+# Logs
+log/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Figures (generated)
+analysis/figures/
+for_figure/figures/
+
+# Environment
+.env
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+/tmp/
+*.tmp
+
+# Large generated files
+synthetic_diverse_*.arrow
+tempopfn_*.arrow
+
+# Vast.ai specific
+run_*.sh
