@@ -1,0 +1,57 @@
+{
+  "Yearly": {
+    "sMAPE": 17.791337966918945,
+    "n_series": 3000,
+    "horizon": 6,
+    "ft_windows": 551,
+    "val_smape_pre": 22.398942947387695,
+    "val_smape_post": 18.807069778442383,
+    "best_epoch": 2
+  },
+  "Quarterly": {
+    "sMAPE": 11.554160118103027,
+    "n_series": 3000,
+    "horizon": 8,
+    "ft_windows": 10908,
+    "val_smape_pre": 16.597959518432617,
+    "val_smape_post": 12.068103790283203,
+    "best_epoch": 2
+  },
+  "Monthly": {
+    "sMAPE": 8.284683227539062,
+    "n_series": 3000,
+    "horizon": 18,
+    "ft_windows": 17483,
+    "val_smape_pre": 8.765134811401367,
+    "val_smape_post": 7.925901889801025,
+    "best_epoch": 1
+  },
+  "Weekly": {
+    "sMAPE": 8.660364151000977,
+    "n_series": 359,
+    "horizon": 13,
+    "ft_windows": 2032,
+    "val_smape_pre": 16.32617950439453,
+    "val_smape_post": 9.887141227722168,
+    "best_epoch": 1
+  },
+  "Daily": {
+    "sMAPE": 3.596182346343994,
+    "n_series": 3000,
+    "horizon": 14,
+    "ft_windows": 19863,
+    "val_smape_pre": 4.159314155578613,
+    "val_smape_post": 3.546079158782959,
+    "best_epoch": 0
+  },
+  "Hourly": {
+    "sMAPE": 16.01308250427246,
+    "n_series": 414,
+    "horizon": 48,
+    "ft_windows": 2912,
+    "val_smape_pre": 16.75823211669922,
+    "val_smape_post": 15.686755180358887,
+    "best_epoch": 2
+  },
+  "Average": 10.983301719029745
+}

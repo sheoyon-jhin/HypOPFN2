@@ -1,0 +1,11 @@
+{
+  "BasicMotions": {
+    "test_acc": 0.65,
+    "n_classes": 4
+  },
+  "Epilepsy": {
+    "test_acc": 0.9420289855072463,
+    "n_classes": 4
+  },
+  "AVG": 0.7960144927536232
+}

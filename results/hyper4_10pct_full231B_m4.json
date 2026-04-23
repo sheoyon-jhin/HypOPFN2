@@ -1,0 +1,26 @@
+{
+  "Yearly": {
+    "sMAPE": 31.326622009277344,
+    "n_series": 22974
+  },
+  "Quarterly": {
+    "sMAPE": 14.983308792114258,
+    "n_series": 24000
+  },
+  "Monthly": {
+    "sMAPE": 18.185216903686523,
+    "n_series": 48000
+  },
+  "Weekly": {
+    "sMAPE": 11.922587394714355,
+    "n_series": 359
+  },
+  "Daily": {
+    "sMAPE": 5.073057174682617,
+    "n_series": 4227
+  },
+  "Hourly": {
+    "sMAPE": 15.83726978302002,
+    "n_series": 414
+  }
+}

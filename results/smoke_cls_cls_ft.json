@@ -1,0 +1,25 @@
+{
+  "BasicMotions": {
+    "test_acc": 0.775,
+    "val_acc": 0.875,
+    "best_epoch": 1,
+    "n_classes": 4,
+    "n_train": 32,
+    "n_val": 8,
+    "n_test": 40,
+    "T": 96,
+    "C": 6
+  },
+  "Heartbeat": {
+    "test_acc": 0.7219512195121951,
+    "val_acc": 0.725,
+    "best_epoch": 1,
+    "n_classes": 2,
+    "n_train": 164,
+    "n_val": 40,
+    "n_test": 205,
+    "T": 400,
+    "C": 61
+  },
+  "AVG": 0.7484756097560976
+}

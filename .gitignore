@@ -1,0 +1,40 @@
+# Large datasets (download on-demand)
+dataset/lotsa/
+dataset/lotsa_cache/
+dataset/synth_cache/
+dataset/classification/
+dataset/anomaly/
+
+# Model weights (multi-GB)
+checkpoints/
+*.pth
+
+# Runtime artifacts
+log/
+*.log
+nohup.out
+results/ft/          # per-job FT subdir (regenerable)
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Env
+timefound/
+.env
+venv/
+
+# Temp
+*.tmp
+*.bak
+/tmp/

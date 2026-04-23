@@ -1,0 +1,48 @@
+{
+  "EthanolConcentration": {
+    "train_acc": 0.5134099721908569,
+    "test_acc": 0.33079847908745247,
+    "n_classes": 4
+  },
+  "FaceDetection": {
+    "train_acc": 0.6079796552658081,
+    "test_acc": 0.5505107832009081,
+    "n_classes": 2
+  },
+  "Handwriting": {
+    "train_acc": 1.0,
+    "test_acc": 0.26823529411764707,
+    "n_classes": 26
+  },
+  "Heartbeat": {
+    "train_acc": 0.9313725829124451,
+    "test_acc": 0.6536585365853659,
+    "n_classes": 2
+  },
+  "PEMS-SF": {
+    "train_acc": 0.8389513492584229,
+    "test_acc": 0.7745664739884393,
+    "n_classes": 7
+  },
+  "SelfRegulationSCP1": {
+    "train_acc": 0.9589552283287048,
+    "test_acc": 0.726962457337884,
+    "n_classes": 2
+  },
+  "SelfRegulationSCP2": {
+    "train_acc": 0.8899999856948853,
+    "test_acc": 0.4388888888888889,
+    "n_classes": 2
+  },
+  "SpokenArabicDigits": {
+    "train_acc": 0.8440672755241394,
+    "test_acc": 0.4861300591177808,
+    "n_classes": 10
+  },
+  "UWaveGestureLibrary": {
+    "train_acc": 1.0,
+    "test_acc": 0.678125,
+    "n_classes": 8
+  },
+  "AVG": 0.545319552480485
+}

@@ -1,0 +1,53 @@
+{
+  "EthanolConcentration": {
+    "train_acc": 0.49425286054611206,
+    "test_acc": 0.40304182509505704,
+    "n_classes": 4
+  },
+  "FaceDetection": {
+    "train_acc": 0.611714780330658,
+    "test_acc": 0.5593076049943246,
+    "n_classes": 2
+  },
+  "Handwriting": {
+    "train_acc": 0.9399999976158142,
+    "test_acc": 0.20588235294117646,
+    "n_classes": 26
+  },
+  "Heartbeat": {
+    "train_acc": 0.867647111415863,
+    "test_acc": 0.7268292682926829,
+    "n_classes": 2
+  },
+  "JapaneseVowels": {
+    "train_acc": 0.5222222208976746,
+    "test_acc": 0.22972972972972974,
+    "n_classes": 9
+  },
+  "PEMS-SF": {
+    "train_acc": 0.7827715277671814,
+    "test_acc": 0.7167630057803468,
+    "n_classes": 7
+  },
+  "SelfRegulationSCP1": {
+    "train_acc": 0.891791045665741,
+    "test_acc": 0.7167235494880546,
+    "n_classes": 2
+  },
+  "SelfRegulationSCP2": {
+    "train_acc": 0.8199999928474426,
+    "test_acc": 0.5222222222222223,
+    "n_classes": 2
+  },
+  "SpokenArabicDigits": {
+    "train_acc": 0.8407334685325623,
+    "test_acc": 0.4779445202364711,
+    "n_classes": 10
+  },
+  "UWaveGestureLibrary": {
+    "train_acc": 0.9916667342185974,
+    "test_acc": 0.715625,
+    "n_classes": 8
+  },
+  "AVG": 0.5274069078780065
+}
