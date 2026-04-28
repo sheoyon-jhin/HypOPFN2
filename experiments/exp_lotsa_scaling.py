@@ -85,6 +85,7 @@ class HyperTrunk(nn.Module):
         super().__init__(); self.w = w; self.btype = btype
         if btype == 'fourier': self.nf = nf; self.idim = 1 + 2*nf
         elif btype == 'poly': self.deg = deg; self.idim = deg + 1
+        elif btype == 'cheby': self.deg = deg; self.idim = deg + 1
         elif btype == 'rbf':
             self.register_buffer('centers', torch.linspace(0, 2, nc))
             self.idim = 1 + nc
@@ -100,6 +101,14 @@ class HyperTrunk(nn.Module):
             return torch.cat([t, torch.sin(2*math.pi*f*t), torch.cos(2*math.pi*f*t)], dim=-1)
         elif self.btype == 'poly':
             return torch.cat([t**i for i in range(self.deg+1)], dim=-1)
+        elif self.btype == 'cheby':
+            # Chebyshev T_n on shifted domain x = t - 1 (training t in [0,1] -> x in [-1,0],
+            # forecast t up to ~1.13 -> x up to ~0.13; numerically stable).
+            x = t - 1.0
+            T = [torch.ones_like(x), x]
+            for _ in range(self.deg - 1):
+                T.append(2 * x * T[-1] - T[-2])
+            return torch.cat(T, dim=-1)
         elif self.btype == 'rbf':
             return torch.cat([t, torch.exp(-20*(t-self.centers.unsqueeze(0))**2)], dim=-1)
 
@@ -127,6 +136,7 @@ class FixedTrunk(nn.Module):
         self.w = w; self.btype = btype; self.is_fixed = True
         if btype == 'fourier': self.nf = nf; self.idim = 1 + 2*nf
         elif btype == 'poly': self.deg = deg; self.idim = deg + 1
+        elif btype == 'cheby': self.deg = deg; self.idim = deg + 1
         elif btype == 'rbf':
             self.register_buffer('centers', torch.linspace(0, 2, nc))
             self.idim = 1 + nc
@@ -150,6 +160,12 @@ class FixedTrunk(nn.Module):
             return torch.cat([t, torch.sin(2*math.pi*f*t), torch.cos(2*math.pi*f*t)], dim=-1)
         elif self.btype == 'poly':
             return torch.cat([t**i for i in range(self.deg+1)], dim=-1)
+        elif self.btype == 'cheby':
+            x = t - 1.0
+            T = [torch.ones_like(x), x]
+            for _ in range(self.deg - 1):
+                T.append(2 * x * T[-1] - T[-2])
+            return torch.cat(T, dim=-1)
         elif self.btype == 'rbf':
             return torch.cat([t, torch.exp(-20*(t-self.centers.unsqueeze(0))**2)], dim=-1)
 
@@ -302,26 +318,44 @@ class LOTSAScalingDataset(Dataset):
                  cache_dir='./dataset/lotsa_cache'):
         """scale_pct: 1, 5, 10, 30, 50 (percentage).
         windows_per_series: how many windows to extract per series (default 5 = sparse).
-          Higher = denser coverage (10x→50, 100x→500). Triggers different cache key."""
+          Higher = denser coverage (10x→50, 100x→500). Triggers different cache key.
+        Cache format: raw memmap (.dat) + metadata (.meta). Streams to disk during
+        build so memory stays bounded regardless of dataset size."""
         self.seq_len = seq_len
 
-        # Cache path: keyed on all params that affect output
         import hashlib
+        import json
         exclude_hash = hashlib.md5(','.join(sorted(EVAL_EXCLUDE)).encode()).hexdigest()[:6]
-        cache_name = f'lotsa_s{scale_pct}_w{seq_len}_wps{windows_per_series}_ex{exclude_hash}.npy'
-        cache_path = os.path.join(cache_dir, cache_name)
+        mv_suffix = '_mv' if bool(int(os.environ.get('LOTSA_MULTIVARIATE', '0'))) else ''
+        cache_key = f'lotsa_s{scale_pct}_w{seq_len}_wps{windows_per_series}_ex{exclude_hash}{mv_suffix}'
+        cache_dat = os.path.join(cache_dir, cache_key + '.dat')
+        cache_meta = os.path.join(cache_dir, cache_key + '.meta')
+        cache_npy_legacy = os.path.join(cache_dir, cache_key + '.npy')
 
-        if os.path.exists(cache_path):
-            print(f'[LOTSA cache HIT] {cache_path}')
-            self.windows = np.load(cache_path, mmap_mode='r')
+        # HIT (memmap format)
+        if os.path.exists(cache_dat) and os.path.exists(cache_meta):
+            with open(cache_meta) as f:
+                meta = json.load(f)
+            shape = tuple(meta['shape'])
+            print(f'[LOTSA cache HIT mmap] {cache_dat}')
+            self.windows = np.memmap(cache_dat, dtype=np.float32, mode='r', shape=shape)
+            print(f'  loaded {len(self.windows):,} windows × {self.windows.shape[-1]} (memmap)')
+            return
+
+        # HIT (legacy .npy)
+        if os.path.exists(cache_npy_legacy):
+            print(f'[LOTSA cache HIT] {cache_npy_legacy}')
+            self.windows = np.load(cache_npy_legacy, mmap_mode='r')
             print(f'  loaded {len(self.windows):,} windows × {self.windows.shape[-1]} (mmap)')
             return
 
-        print(f'[LOTSA cache MISS] building {cache_path}')
-        self.windows = []
+        # MISS — streaming build directly to memmap
+        print(f'[LOTSA cache MISS] building {cache_dat} (memmap streaming)')
+        os.makedirs(cache_dir, exist_ok=True)
 
         if not os.path.exists(lotsa_dir):
             print(f'ERROR: LOTSA not found at {lotsa_dir}')
+            self.windows = np.zeros((0, seq_len), dtype=np.float32)
             return
 
         all_dirs = sorted([d for d in os.listdir(lotsa_dir)
@@ -330,10 +364,17 @@ class LOTSAScalingDataset(Dataset):
         excluded_present = [d for d in all_dirs if d in EVAL_EXCLUDE]
         assert not (set(datasets) & EVAL_EXCLUDE), \
             f'Data leakage: {set(datasets) & EVAL_EXCLUDE} must not be in pretraining'
-        # Windows per dataset cap based on scale
         wpd = max(50, int(150 * scale_pct))
         print(f'LOTSA {scale_pct}%: {len(datasets)} datasets (excluded {len(excluded_present)} eval: {sorted(excluded_present)}), cap ~{wpd} windows each, windows_per_series={windows_per_series}')
 
+        # Preallocate memmap (upper bound). LOTSA_MAX_WINDOWS env var for override.
+        # Observed ~75M at wps=10000 on 156 datasets; default 100M with 30% safety margin.
+        max_est = int(os.environ.get('LOTSA_MAX_WINDOWS', 100_000_000))
+        est_gb = max_est * seq_len * 4 / 1e9
+        print(f'  [preallocate memmap] max={max_est:,} × {seq_len} → {est_gb:.1f} GB on disk (will truncate at end)')
+        mm = np.memmap(cache_dat, dtype=np.float32, mode='w+', shape=(max_est, seq_len))
+
+        count = 0
         for i, ds_name in enumerate(datasets):
             ds_path = os.path.join(lotsa_dir, ds_name)
             arrow_files = [f for f in os.listdir(ds_path) if f.endswith('.arrow')]
@@ -341,7 +382,6 @@ class LOTSAScalingDataset(Dataset):
                 continue
             try:
                 arrow_path = os.path.join(ds_path, arrow_files[0])
-                # LOTSA uses Arrow IPC stream format, not Arrow file format
                 try:
                     table = ipc.open_file(arrow_path).read_all()
                 except Exception:
@@ -353,40 +393,66 @@ class LOTSAScalingDataset(Dataset):
                     if cn in col_names:
                         target_col = cn; break
 
-                count = 0
+                ds_count = 0
+                multivariate = bool(int(os.environ.get('LOTSA_MULTIVARIATE', '0')))
                 if target_col:
                     for row_idx in range(min(len(table), wpd * 3)):
                         try:
                             vals = table.column(target_col)[row_idx].as_py()
-                            if isinstance(vals, list):
-                                ts = np.array(vals[0] if isinstance(vals[0], list) else vals, dtype=np.float32)
-                            else:
+                            if not isinstance(vals, list):
                                 continue
-                            if len(ts) >= seq_len:
+                            # Build list of channels (each is a univariate series)
+                            if isinstance(vals[0], list):
+                                if multivariate:
+                                    channels = [np.array(ch, dtype=np.float32) for ch in vals]
+                                else:
+                                    channels = [np.array(vals[0], dtype=np.float32)]
+                            else:
+                                channels = [np.array(vals, dtype=np.float32)]
+                            for ts in channels:
+                                if len(ts) < seq_len:
+                                    continue
                                 stride = max(1, (len(ts) - seq_len) // min(windows_per_series, wpd))
                                 for start in range(0, len(ts) - seq_len + 1, stride):
                                     w = ts[start:start+seq_len]
                                     s = np.std(w)
                                     if s > 1e-6:
-                                        self.windows.append(np.clip((w-np.mean(w))/s, -10, 10).astype(np.float32))
+                                        if count >= max_est:
+                                            break
+                                        mm[count] = np.clip((w-np.mean(w))/s, -10, 10).astype(np.float32)
                                         count += 1
-                                        if count >= wpd: break
+                                        ds_count += 1
+                                        if ds_count >= wpd: break
+                                if ds_count >= wpd or count >= max_est: break
                         except: continue
-                        if count >= wpd: break
+                        if ds_count >= wpd or count >= max_est: break
 
                 if (i+1) % 20 == 0:
-                    print(f'  [{i+1}/{len(datasets)}] total: {len(self.windows):,}')
+                    mm.flush()  # write dirty pages to disk, let OS reclaim
+                    print(f'  [{i+1}/{len(datasets)}] total: {count:,} (flushed)')
+                if count >= max_est:
+                    print(f'  WARNING: hit max_est={max_est:,}, stopping early')
+                    break
             except: continue
 
-        self.windows = np.array(self.windows, dtype=np.float32) if self.windows else np.zeros((0, seq_len), dtype=np.float32)
-        print(f'LOTSA {scale_pct}%: {len(self.windows):,} windows loaded')
-        # Persist cache for future runs
-        try:
-            os.makedirs(cache_dir, exist_ok=True)
-            np.save(cache_path, self.windows)
-            print(f'[LOTSA cache SAVE] {cache_path} ({self.windows.nbytes/1e9:.1f} GB)')
-        except Exception as e:
-            print(f'[LOTSA cache SAVE failed] {e}')
+        # Finalize
+        mm.flush()
+        del mm
+
+        # Truncate to actual size and write metadata
+        actual_bytes = count * seq_len * 4
+        with open(cache_dat, 'r+b') as f:
+            f.truncate(actual_bytes)
+        with open(cache_meta, 'w') as f:
+            json.dump({'shape': [count, seq_len], 'dtype': 'float32'}, f)
+
+        # Re-open as read-only memmap
+        if count > 0:
+            self.windows = np.memmap(cache_dat, dtype=np.float32, mode='r', shape=(count, seq_len))
+        else:
+            self.windows = np.zeros((0, seq_len), dtype=np.float32)
+        print(f'[LOTSA cache SAVE] {cache_dat} ({count:,} windows, {actual_bytes/1e9:.1f} GB)')
+        print(f'LOTSA {scale_pct}%: {count:,} windows loaded (memmap)')
 
     def __len__(self): return len(self.windows)
     def __getitem__(self, idx):
@@ -474,6 +540,48 @@ class LOTSASubsetDataset(Dataset):
         return torch.tensor(self.windows[idx], dtype=torch.float32)
 
 
+class CauKerSynthDataset(Dataset):
+    """
+    Drop-in replacement for SyntheticGapFiller, loading CauKer-generated cache.
+
+    Cache format: {.dat memmap, .meta json} (same as LOTSAScalingDataset)
+    Pre-built via data/cauker_to_cache.py from CauKer .arrow output.
+    """
+    def __init__(self, cache_dir='./dataset/cauker_cache', cache_name=None,
+                 seq_len=2160):
+        import json
+        if cache_name is None:
+            cache_name = os.environ.get('CAUKER_CACHE_NAME', 'cauker_synth')
+        cache_dat = os.path.join(cache_dir, cache_name + '.dat')
+        cache_meta = os.path.join(cache_dir, cache_name + '.meta')
+        if not (os.path.exists(cache_dat) and os.path.exists(cache_meta)):
+            raise FileNotFoundError(
+                f'CauKer cache missing: {cache_dat}\n'
+                'Generate first: python data/cauker_to_cache.py --arrow <path>'
+            )
+        with open(cache_meta) as f:
+            meta = json.load(f)
+        shape = tuple(meta['shape'])
+        self.windows = np.memmap(cache_dat, dtype=np.float32, mode='r', shape=shape)
+        self.seq_len = shape[1]              # cached length
+        self.seq_len_target = seq_len        # target (training expects this)
+        print(f'[CauKer cache HIT] {cache_dat}')
+        print(f'  loaded {len(self.windows):,} windows × {self.seq_len} (memmap, target={seq_len})')
+
+    def __len__(self): return len(self.windows)
+    def __getitem__(self, idx):
+        w = self.windows[idx]
+        # If cached series is shorter than expected seq_len, tile to fill.
+        # This lets us cache CauKer at L=720 (much faster GP) while training
+        # pipeline expects window_len=2160.
+        if len(w) < self.seq_len_target:
+            n_tile = (self.seq_len_target + len(w) - 1) // len(w)
+            w = np.tile(w, n_tile)[:self.seq_len_target]
+        elif len(w) > self.seq_len_target:
+            w = w[:self.seq_len_target]
+        return torch.tensor(w, dtype=torch.float32)
+
+
 class SyntheticGapFiller(Dataset):
     """
     제외된 eval benchmark 패턴을 정밀 모방하는 synthetic dataset.
@@ -515,7 +623,35 @@ class SyntheticGapFiller(Dataset):
         'm4_business':         0.04,  # Multiplicative seasonality + trend + promo spikes
     }
 
+    # ETT-boosted weights: ETT 38% → 64% (strengthens ETT-style coverage)
+    DOMAIN_WEIGHTS_ETTBOOST = {
+        'ett_h1':              0.16,
+        'ett_h2':              0.16,
+        'ett_m1':              0.16,
+        'ett_m2':              0.16,
+        'weather_dry':         0.05,
+        'weather_wet':         0.05,
+        'weather_ann':         0.04,
+        'exchange':            0.02,
+        'm4_monthly':          0.02,
+        'm4_quarterly':        0.02,
+        'regime':              0.02,
+        'composite':           0.01,
+        'nonstationary_burst': 0.02,
+        'multiscale':          0.02,
+        'heteroskedastic':     0.01,
+        'm4_yearly':           0.02,
+        'm4_weekly':           0.02,
+        'm4_daily':            0.02,
+        'm4_hourly':           0.02,
+        'm4_business':         0.02,
+    }
+
     def __init__(self, n_samples=50000, seq_len=192):
+        # Optional ETT-boost weights via env var
+        if os.environ.get('SYNTH_ETTBOOST', '0') == '1':
+            self.DOMAIN_WEIGHTS = self.DOMAIN_WEIGHTS_ETTBOOST
+            print(f'  [synth] ETT-boosted DOMAIN_WEIGHTS active')
         # Disk cache: same (n_samples, seq_len, DOMAIN_WEIGHTS) → reuse generated array
         cache_dir = os.environ.get('SYNTH_CACHE_DIR', './dataset/synth_cache')
         os.makedirs(cache_dir, exist_ok=True)

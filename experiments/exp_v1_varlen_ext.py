@@ -30,7 +30,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 
 from experiments.exp_lotsa_scaling import (
     LOTSAScalingDataset, LOTSASubsetDataset, TARGET_SIMILAR_DATASETS,
-    SyntheticGapFiller, HyperTrunk, FixedTrunk, hyper_fwd,
+    SyntheticGapFiller, CauKerSynthDataset, HyperTrunk, FixedTrunk, hyper_fwd,
     extract_freq, extract_freq_multiscale, LatentDecomp, TOP_K_IQ, INFORMED_DIM, PATCH_SIZE,
 )
 
@@ -357,7 +357,8 @@ class OperatorModelVarLen(nn.Module):
                  use_latent_decomp=False, hybrid_trunk=False, use_nll=False, nhead=8,
                  fourier_nf=32, multi_scale_fourier=False,
                  multi_scale_iq=False, ms_iq_k=3, ms_iq_scales=(1.0, 0.5, 0.25),
-                 pool_type='mean', highfreq_nf=0, all_fixed=False):
+                 pool_type='mean', highfreq_nf=0, highfreq2_nf=0, all_fixed=False,
+                 use_cheby=False):
         super().__init__()
         self.max_seq_len = max_seq_len  # used to normalize t (anchor scale)
         self.d_model = d_model
@@ -411,14 +412,18 @@ class OperatorModelVarLen(nn.Module):
                 FixedTrunk(trunk_w, 'rbf', d_model, **idim_kw),
             ])
         else:
+            poly_btype = 'cheby' if use_cheby else 'poly'
             self.trunks = nn.ModuleList([
                 HyperTrunk(trunk_w, 'fourier', nf=fourier_nf, **idim_kw),
-                HyperTrunk(trunk_w, 'poly', **idim_kw),
+                HyperTrunk(trunk_w, poly_btype, **idim_kw),
                 HyperTrunk(trunk_w, 'rbf', **idim_kw),
             ])
         # Optional: add high-frequency FixedTrunk for ETTh2/ETTm2 noise capture
         if highfreq_nf > 0:
             self.trunks.append(FixedTrunk(trunk_w, 'fourier', d_model, nf=highfreq_nf, **idim_kw))
+        # Optional: 2nd higher-frequency trunk (e.g. nf=512) for sudden drift / sharp transitions
+        if highfreq2_nf > 0:
+            self.trunks.append(FixedTrunk(trunk_w, 'fourier', d_model, nf=highfreq2_nf, **idim_kw))
         # Heads only for HyperTrunk (FixedTrunk has its own coef_head)
         self.heads = nn.ModuleList([
             nn.Linear(d_model, t.odim) if not getattr(t, 'is_fixed', False)
@@ -855,6 +860,12 @@ if __name__ == '__main__':
                    help='Epoch to resume from (0-indexed; e.g. if last completed epoch was 23, pass 23)')
     p.add_argument('--windows_per_series', type=int, default=5,
                    help='LOTSA stride control: max windows extracted per series. 5=current (~0.12% coverage), 50=10x, 500=100x.')
+    p.add_argument('--lotsa_subsample', type=int, default=0,
+                   help='If >0, randomly subsample N windows from LOTSA cache (e.g. 10000000 for 10pct of MV cache). 0=use all.')
+    p.add_argument('--use_cauker', type=int, default=0,
+                   help='If 1, replace SyntheticGapFiller with CauKerSynthDataset (loads pre-built CauKer cache).')
+    p.add_argument('--cauker_name', type=str, default='cauker_synth',
+                   help='CauKer cache base name (lookup at dataset/cauker_cache/{name}.dat).')
     p.add_argument('--mask_recon_only', type=int, default=0,
                    help='If 1, use masked reconstruction as sole pretrain objective (FeDaL/MAE-style). Disables forecast pretrain.')
     p.add_argument('--lr', type=float, default=3e-4,
@@ -891,10 +902,14 @@ if __name__ == '__main__':
                    help='1: use multi-scale FFT for IQ (3 scales × 3 peaks = 9 freqs, IQ dim 21)')
     p.add_argument('--pool_type', type=str, default='mean', choices=['mean', 'attn'],
                    help='Encoder pool: mean (default) or attn (learnable CLS cross-attention)')
+    p.add_argument('--highfreq2_nf', type=int, default=0,
+                   help='Optional 2nd Fourier trunk nf (e.g. 512). For sudden-drift / sharp transitions.')
     p.add_argument('--highfreq_nf', type=int, default=0,
                    help='Add 4th FixedTrunk Fourier with this nf (e.g. 256) for high-freq noise capture')
     p.add_argument('--all_fixed', type=int, default=0,
                    help='1: use all FixedTrunks (no HyperNet, no 0.01 scaling issue)')
+    p.add_argument('--use_cheby', type=int, default=0,
+                   help='1: replace HyperTrunk poly with Chebyshev T_n basis (shifted to t-1)')
     p.add_argument('--target_boost', type=int, default=0,
                    help='Windows per target-similar LOTSA dataset (0=off, e.g. 30000)')
     p.add_argument('--model_type', type=str, default='varlen', choices=['varlen', 'decomp'],
@@ -921,8 +936,19 @@ if __name__ == '__main__':
     else:
         lotsa_ds = LOTSAScalingDataset(LOTSA_DIR, args.scale, seq_len=window_len,
                                         windows_per_series=args.windows_per_series)
-        n_synth = args.synth_n if args.synth_n > 0 else max(10000, int(len(lotsa_ds) * args.synth_ratio))
-        synth_ds = SyntheticGapFiller(n_samples=n_synth, seq_len=window_len)
+        if args.lotsa_subsample > 0 and args.lotsa_subsample < len(lotsa_ds):
+            import random
+            random.seed(42)
+            n = args.lotsa_subsample
+            print(f'[LOTSA subsample] {n:,} / {len(lotsa_ds):,} windows (seed=42)')
+            indices = random.sample(range(len(lotsa_ds)), n)
+            lotsa_ds = torch.utils.data.Subset(lotsa_ds, indices)
+        if args.use_cauker:
+            print(f'[Synth source] CauKer cache: {args.cauker_name}')
+            synth_ds = CauKerSynthDataset(cache_name=args.cauker_name, seq_len=window_len)
+        else:
+            n_synth = args.synth_n if args.synth_n > 0 else max(10000, int(len(lotsa_ds) * args.synth_ratio))
+            synth_ds = SyntheticGapFiller(n_samples=n_synth, seq_len=window_len)
         datasets = [lotsa_ds, synth_ds]
     # Option A: additional LOTSA loader at shorter window_len to capture short M4-like series
     lotsa_short = None
@@ -974,7 +1000,9 @@ if __name__ == '__main__':
             multi_scale_iq=bool(args.multi_scale_iq),
             pool_type=args.pool_type,
             highfreq_nf=args.highfreq_nf,
+            highfreq2_nf=args.highfreq2_nf,
             all_fixed=bool(args.all_fixed),
+            use_cheby=bool(args.use_cheby),
         ).to(DEVICE)
         n = sum(p.numel() for p in model.parameters())
         print(f'Model V1 VarLen: {n/1e6:.1f}M params (hybrid={bool(args.hybrid_trunk)})')
