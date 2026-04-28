@@ -656,21 +656,41 @@ class SyntheticGapFiller(Dataset):
         cache_dir = os.environ.get('SYNTH_CACHE_DIR', './dataset/synth_cache')
         os.makedirs(cache_dir, exist_ok=True)
         # Hash on domain weights too so changing weights invalidates cache
-        import hashlib
+        import hashlib, json
         wkey = hashlib.md5(str(sorted(self.DOMAIN_WEIGHTS.items())).encode()).hexdigest()[:8]
-        cache_path = os.path.join(cache_dir, f'synth_n{n_samples}_seq{seq_len}_w{wkey}.npy')
-        if os.path.exists(cache_path):
-            print(f'  [synth cache HIT] loading {cache_path}')
-            self.windows = np.load(cache_path)
+        cache_key = f'synth_n{n_samples}_seq{seq_len}_w{wkey}'
+        cache_npy = os.path.join(cache_dir, cache_key + '.npy')
+        cache_dat = os.path.join(cache_dir, cache_key + '.dat')
+        cache_meta = os.path.join(cache_dir, cache_key + '.meta')
+
+        # HIT: streaming memmap (preferred)
+        if os.path.exists(cache_dat) and os.path.exists(cache_meta):
+            with open(cache_meta) as f:
+                meta = json.load(f)
+            shape = tuple(meta['shape'])
+            print(f'  [synth cache HIT mmap] {cache_dat}')
+            self.windows = np.memmap(cache_dat, dtype=np.float32, mode='r', shape=shape)
+            print(f'  [synth cache] {len(self.windows):,} windows × {self.windows.shape[1]} loaded (memmap)')
+            return
+
+        # HIT: legacy .npy (backward compat — uses mmap so even big files OK)
+        if os.path.exists(cache_npy):
+            print(f'  [synth cache HIT] loading {cache_npy}')
+            self.windows = np.load(cache_npy, mmap_mode='r')
             print(f'  [synth cache] {len(self.windows):,} windows × {self.windows.shape[1]} loaded')
             return
 
-        print(f'  [synth cache MISS] generating {n_samples:,} → {cache_path}')
-        self.windows = []
+        # MISS — streaming build directly to memmap (RAM-bounded)
+        print(f'  [synth cache MISS] streaming {n_samples:,} → {cache_dat}')
+        mm = np.memmap(cache_dat, dtype=np.float32, mode='w+', shape=(n_samples, seq_len))
         rng = np.random.RandomState(42)
         domains = list(self.DOMAIN_WEIGHTS.keys())
         probs = np.array([self.DOMAIN_WEIGHTS[d] for d in domains])
         probs = probs / probs.sum()
+        write_count = 0
+        log_every = max(10000, n_samples // 100)
+        import time as _time
+        _t0 = _time.time()
 
         for _ in range(n_samples):
             domain = rng.choice(domains, p=probs)
@@ -722,15 +742,34 @@ class SyntheticGapFiller(Dataset):
 
             s = np.std(y)
             if s > 1e-6:
-                self.windows.append(
-                    np.clip((y - np.mean(y)) / s, -10, 10).astype(np.float32)
-                )
+                mm[write_count] = np.clip((y - np.mean(y)) / s, -10, 10).astype(np.float32)
+                write_count += 1
+                if write_count % log_every == 0:
+                    elapsed = _time.time() - _t0
+                    rate = write_count / max(elapsed, 1e-3)
+                    eta = (n_samples - write_count) / max(rate, 1e-3)
+                    print(f'  [synth] {write_count:,}/{n_samples:,} '
+                          f'({write_count/n_samples*100:.1f}%) | '
+                          f'{rate:.0f}/s | ETA {eta/3600:.1f}h', flush=True)
 
-        self.windows = np.array(self.windows, dtype=np.float32)
-        np.save(cache_path, self.windows)
-        print(f'Synthetic gap filler: {len(self.windows):,} '
+        # Truncate memmap to actual count, write metadata, reopen as read-only
+        mm.flush()
+        del mm
+        if write_count < n_samples:
+            # Truncate file to actual size
+            actual_bytes = write_count * seq_len * 4
+            with open(cache_dat, 'r+b') as f:
+                f.truncate(actual_bytes)
+        with open(cache_meta, 'w') as f:
+            json.dump({'shape': [write_count, seq_len], 'dtype': 'float32',
+                       'n_requested': n_samples}, f)
+        print(f'Synthetic gap filler: {write_count:,} samples '
               f'(domains: {list(self.DOMAIN_WEIGHTS.keys())})')
-        print(f'  [synth cache SAVED] {cache_path}')
+        print(f'  [synth cache SAVED mmap] {cache_dat} ({write_count*seq_len*4/1e9:.1f} GB)')
+
+        # Reload as read-only memmap for use
+        self.windows = np.memmap(cache_dat, dtype=np.float32, mode='r',
+                                 shape=(write_count, seq_len))
 
     # ----------------------------------------------------------
     # ETT-style: 전력 트랜스포머 온도

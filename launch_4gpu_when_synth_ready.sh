@@ -4,38 +4,23 @@
 
 cd /workspace/HypOPFN2
 PY=/workspace/timefound/bin/python
-SYNTH_FILE=dataset/synth_cache/synth_n30000000_seq2160_w56c0c04d.npy
+SYNTH_FILE=dataset/synth_cache/synth_n30000000_seq2160_w56c0c04d.dat
+SYNTH_META=dataset/synth_cache/synth_n30000000_seq2160_w56c0c04d.meta
 
 echo "[$(date)] Waiting for 30M synth cache: $SYNTH_FILE"
 
-# Phase 1: wait for the file to appear and stabilize (size unchanged for 60s)
-prev_size=0
-stable_count=0
-while [ $stable_count -lt 3 ]; do
+# Phase 1: wait for both .dat and .meta to exist (meta is written ONLY at end)
+echo "[$(date)] Waiting for $SYNTH_META (written only when build completes)"
+while [ ! -f "$SYNTH_META" ]; do
   if [ -f "$SYNTH_FILE" ]; then
     cur_size=$(stat -c %s "$SYNTH_FILE" 2>/dev/null || echo 0)
-    if [ "$cur_size" -eq "$prev_size" ] && [ "$cur_size" -gt 100000000 ]; then
-      stable_count=$((stable_count + 1))
-      echo "[$(date)] Stable check $stable_count/3 (size $cur_size)"
-    else
-      stable_count=0
-      prev_size=$cur_size
-      echo "[$(date)] Still growing: $(numfmt --to=iec $cur_size)"
-    fi
+    echo "[$(date)] dat: $(numfmt --to=iec $cur_size) (still building)"
   else
     echo "[$(date)] still waiting for file..."
   fi
-  sleep 60
+  sleep 120
 done
-
-# Also check that the build process has exited (cleanest signal)
-echo "[$(date)] File looks stable. Confirming build process done..."
-if grep -q "DONE\|cache] .* loaded" log/build_synth30M.log 2>/dev/null; then
-  echo "[$(date)] Build log says DONE. Proceeding."
-else
-  echo "[$(date)] Waiting another 5 min for safety..."
-  sleep 300
-fi
+echo "[$(date)] meta detected. Build complete."
 
 echo "[$(date)] === LAUNCHING 4 ABLATIONS ==="
 mkdir -p log
