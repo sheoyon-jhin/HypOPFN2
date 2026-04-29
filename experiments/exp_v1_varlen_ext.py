@@ -359,7 +359,7 @@ class OperatorModelVarLen(nn.Module):
                  fourier_nf=32, multi_scale_fourier=False,
                  multi_scale_iq=False, ms_iq_k=3, ms_iq_scales=(1.0, 0.5, 0.25),
                  pool_type='mean', highfreq_nf=0, highfreq2_nf=0, all_fixed=False,
-                 use_cheby=False, learnable_alpha=False):
+                 use_cheby=False, learnable_alpha=False, use_wavelet=False):
         super().__init__()
         self.max_seq_len = max_seq_len  # used to normalize t (anchor scale)
         self.d_model = d_model
@@ -414,10 +414,11 @@ class OperatorModelVarLen(nn.Module):
             ])
         else:
             poly_btype = 'cheby' if use_cheby else 'poly'
+            local_btype = 'wavelet' if use_wavelet else 'rbf'
             self.trunks = nn.ModuleList([
                 HyperTrunk(trunk_w, 'fourier', nf=fourier_nf, **idim_kw),
                 HyperTrunk(trunk_w, poly_btype, **idim_kw),
-                HyperTrunk(trunk_w, 'rbf', **idim_kw),
+                HyperTrunk(trunk_w, local_btype, **idim_kw),
             ])
         # Optional: add high-frequency FixedTrunk for ETTh2/ETTm2 noise capture
         if highfreq_nf > 0:
@@ -921,6 +922,9 @@ if __name__ == '__main__':
     p.add_argument('--learnable_alpha', type=int, default=0,
                    help='1: make hypernet output scale α learnable per HyperTrunk '
                         '(initialized to 0.01 = legacy behavior). Adds one scalar param per trunk.')
+    p.add_argument('--use_wavelet', type=int, default=0,
+                   help='1: replace 3rd trunk (rbf) with Morlet-style wavelet basis '
+                        '(8 scales × 8 translations, ψ(τ)=exp(-τ²/2)·cos(5τ)).')
     p.add_argument('--target_boost', type=int, default=0,
                    help='Windows per target-similar LOTSA dataset (0=off, e.g. 30000)')
     p.add_argument('--model_type', type=str, default='varlen', choices=['varlen', 'decomp'],
@@ -1016,6 +1020,7 @@ if __name__ == '__main__':
             all_fixed=bool(args.all_fixed),
             use_cheby=bool(args.use_cheby),
             learnable_alpha=bool(args.learnable_alpha),
+            use_wavelet=bool(args.use_wavelet),
         ).to(DEVICE)
         n = sum(p.numel() for p in model.parameters())
         print(f'Model V1 VarLen: {n/1e6:.1f}M params (hybrid={bool(args.hybrid_trunk)})')

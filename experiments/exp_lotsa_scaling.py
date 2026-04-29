@@ -82,7 +82,8 @@ def extract_freq_multiscale(x, top_k_per_scale=3, scales=(1.0, 0.5, 0.25)):
 
 class HyperTrunk(nn.Module):
     def __init__(self, w, btype, nf=32, deg=6, nc=20, informed_dim=None,
-                 learnable_alpha=False, init_alpha=0.01):
+                 learnable_alpha=False, init_alpha=0.01,
+                 wave_n_scales=8, wave_n_trans=8, wave_omega=5.0):
         super().__init__(); self.w = w; self.btype = btype
         if btype == 'fourier': self.nf = nf; self.idim = 1 + 2*nf
         elif btype == 'poly': self.deg = deg; self.idim = deg + 1
@@ -90,6 +91,23 @@ class HyperTrunk(nn.Module):
         elif btype == 'rbf':
             self.register_buffer('centers', torch.linspace(0, 2, nc))
             self.idim = 1 + nc
+        elif btype == 'wavelet':
+            # Morlet-like real wavelet: ψ(τ) = exp(-τ²/2) · cos(ω·τ),  τ = (t - b) / a
+            # We pre-define a grid of (scale a, translation b) pairs.
+            # Scales geometric from 0.5 down (capture coarse → fine);
+            # translations cover [-0.05, 1.18] so they match training t range
+            # (training t ∈ [0,1], forecast extends to ~1.13).
+            self.wave_n_scales = wave_n_scales
+            self.wave_n_trans = wave_n_trans
+            self.wave_omega = wave_omega
+            scales = torch.tensor([0.5 * (0.5 ** i) for i in range(wave_n_scales)])
+            trans = torch.linspace(-0.05, 1.18, wave_n_trans)
+            # Flatten the (S, T) grid to (S*T,)
+            s_grid = scales.view(-1, 1).expand(-1, wave_n_trans).reshape(-1)
+            t_grid = trans.view(1, -1).expand(wave_n_scales, -1).reshape(-1)
+            self.register_buffer('wave_scales', s_grid)
+            self.register_buffer('wave_trans', t_grid)
+            self.idim = 1 + wave_n_scales * wave_n_trans  # raw t + S*T wavelet features
         self.informed_dim = INFORMED_DIM if informed_dim is None else informed_dim
         self.full_idim = self.idim + self.informed_dim
         self.pc = self.full_idim * w + w
@@ -127,6 +145,12 @@ class HyperTrunk(nn.Module):
             return torch.cat(T, dim=-1)
         elif self.btype == 'rbf':
             return torch.cat([t, torch.exp(-20*(t-self.centers.unsqueeze(0))**2)], dim=-1)
+        elif self.btype == 'wavelet':
+            # t: (..., 1)
+            # Compute τ = (t - b) / a for all (a, b) pairs, output ψ(τ) = exp(-τ²/2)·cos(ω·τ)
+            tau = (t - self.wave_trans) / self.wave_scales   # broadcasts to (..., S*T)
+            psi = torch.exp(-0.5 * tau * tau) * torch.cos(self.wave_omega * tau)
+            return torch.cat([t, psi], dim=-1)
 
 
 def hyper_fwd(trunk, t_flat, head_out, iq):
@@ -149,7 +173,8 @@ class FixedTrunk(nn.Module):
     Context z is combined via inner product with MLP output (classic DeepONet style).
     """
     def __init__(self, w, btype, d_model=512, hidden=128, nf=32, deg=6, nc=20,
-                 informed_dim=None, learnable_alpha=False, init_alpha=0.01):
+                 informed_dim=None, learnable_alpha=False, init_alpha=0.01,
+                 wave_n_scales=8, wave_n_trans=8, wave_omega=5.0):
         # learnable_alpha/init_alpha: ignored (FixedTrunk has no hypernet scaling).
         # Accepted for kwarg-compatibility with HyperTrunk so callers can share **idim_kw.
         _ = (learnable_alpha, init_alpha)
@@ -161,6 +186,17 @@ class FixedTrunk(nn.Module):
         elif btype == 'rbf':
             self.register_buffer('centers', torch.linspace(0, 2, nc))
             self.idim = 1 + nc
+        elif btype == 'wavelet':
+            self.wave_n_scales = wave_n_scales
+            self.wave_n_trans = wave_n_trans
+            self.wave_omega = wave_omega
+            scales = torch.tensor([0.5 * (0.5 ** i) for i in range(wave_n_scales)])
+            trans = torch.linspace(-0.05, 1.18, wave_n_trans)
+            s_grid = scales.view(-1, 1).expand(-1, wave_n_trans).reshape(-1)
+            t_grid = trans.view(1, -1).expand(wave_n_scales, -1).reshape(-1)
+            self.register_buffer('wave_scales', s_grid)
+            self.register_buffer('wave_trans', t_grid)
+            self.idim = 1 + wave_n_scales * wave_n_trans
         self.informed_dim = INFORMED_DIM if informed_dim is None else informed_dim
         self.full_idim = self.idim + self.informed_dim
 
@@ -189,6 +225,10 @@ class FixedTrunk(nn.Module):
             return torch.cat(T, dim=-1)
         elif self.btype == 'rbf':
             return torch.cat([t, torch.exp(-20*(t-self.centers.unsqueeze(0))**2)], dim=-1)
+        elif self.btype == 'wavelet':
+            tau = (t - self.wave_trans) / self.wave_scales
+            psi = torch.exp(-0.5 * tau * tau) * torch.cos(self.wave_omega * tau)
+            return torch.cat([t, psi], dim=-1)
 
     def forward(self, t_flat, iq, z):
         B = z.shape[0]
