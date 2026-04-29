@@ -238,7 +238,8 @@ class OperatorModelDecomp(nn.Module):
     """
     def __init__(self, max_seq_len=720, d_model=512, n_layers=6, trunk_w=192,
                  nhead=8, fourier_nf=32, pool_type='mean', highfreq_nf=0,
-                 all_fixed=False, decomp_kernels=(49, 25, 7)):
+                 all_fixed=False, decomp_kernels=(49, 25, 7),
+                 learnable_alpha=False):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.d_model = d_model
@@ -251,7 +252,7 @@ class OperatorModelDecomp(nn.Module):
             d_model=d_model, n_layers=n_layers, nhead=nhead, pool_type=pool_type)
 
         informed_dim = INFORMED_DIM
-        idim_kw = {'informed_dim': informed_dim}
+        idim_kw = {'informed_dim': informed_dim, 'learnable_alpha': learnable_alpha}
 
         # Build trunks matched to decomposition components
         # Order: [trend→Poly, seasonal→Fourier(nf), highfreq→Fourier(highfreq_nf), residual→RBF]
@@ -358,7 +359,7 @@ class OperatorModelVarLen(nn.Module):
                  fourier_nf=32, multi_scale_fourier=False,
                  multi_scale_iq=False, ms_iq_k=3, ms_iq_scales=(1.0, 0.5, 0.25),
                  pool_type='mean', highfreq_nf=0, highfreq2_nf=0, all_fixed=False,
-                 use_cheby=False):
+                 use_cheby=False, learnable_alpha=False):
         super().__init__()
         self.max_seq_len = max_seq_len  # used to normalize t (anchor scale)
         self.d_model = d_model
@@ -384,7 +385,7 @@ class OperatorModelVarLen(nn.Module):
                 nn.Linear(64, 1),
             )
 
-        idim_kw = {'informed_dim': self.informed_dim}
+        idim_kw = {'informed_dim': self.informed_dim, 'learnable_alpha': learnable_alpha}
         if multi_scale_fourier:
             # 3 Fourier trunks covering low/mid/high frequencies
             self.trunks = nn.ModuleList([
@@ -690,7 +691,14 @@ def train_varlen(model, datasets, save_path, max_seq_len, seq_len_choices,
     print(f'{"="*60}')
 
     if resume_from:
-        model.load_state_dict(torch.load(resume_from, map_location=next(model.parameters()).device, weights_only=True))
+        # strict=False so newly added params (e.g. learnable log_alpha) are
+        # initialized to their default while everything else loads cleanly.
+        sd = torch.load(resume_from, map_location=next(model.parameters()).device, weights_only=True)
+        missing, unexpected = model.load_state_dict(sd, strict=False)
+        if missing:
+            print(f'  [resume] missing keys (defaulted): {missing}')
+        if unexpected:
+            print(f'  [resume] unexpected keys (skipped): {unexpected}')
 
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
@@ -910,6 +918,9 @@ if __name__ == '__main__':
                    help='1: use all FixedTrunks (no HyperNet, no 0.01 scaling issue)')
     p.add_argument('--use_cheby', type=int, default=0,
                    help='1: replace HyperTrunk poly with Chebyshev T_n basis (shifted to t-1)')
+    p.add_argument('--learnable_alpha', type=int, default=0,
+                   help='1: make hypernet output scale α learnable per HyperTrunk '
+                        '(initialized to 0.01 = legacy behavior). Adds one scalar param per trunk.')
     p.add_argument('--target_boost', type=int, default=0,
                    help='Windows per target-similar LOTSA dataset (0=off, e.g. 30000)')
     p.add_argument('--model_type', type=str, default='varlen', choices=['varlen', 'decomp'],
@@ -984,6 +995,7 @@ if __name__ == '__main__':
             highfreq_nf=args.highfreq_nf,
             all_fixed=bool(args.all_fixed),
             decomp_kernels=decomp_k,
+            learnable_alpha=bool(args.learnable_alpha),
         ).to(DEVICE)
         n = sum(p.numel() for p in model.parameters())
         print(f'Model Decomp: {n/1e6:.1f}M params (all_fixed={bool(args.all_fixed)})')
@@ -1003,6 +1015,7 @@ if __name__ == '__main__':
             highfreq2_nf=args.highfreq2_nf,
             all_fixed=bool(args.all_fixed),
             use_cheby=bool(args.use_cheby),
+            learnable_alpha=bool(args.learnable_alpha),
         ).to(DEVICE)
         n = sum(p.numel() for p in model.parameters())
         print(f'Model V1 VarLen: {n/1e6:.1f}M params (hybrid={bool(args.hybrid_trunk)})')

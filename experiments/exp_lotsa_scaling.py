@@ -81,7 +81,8 @@ def extract_freq_multiscale(x, top_k_per_scale=3, scales=(1.0, 0.5, 0.25)):
 
 
 class HyperTrunk(nn.Module):
-    def __init__(self, w, btype, nf=32, deg=6, nc=20, informed_dim=None):
+    def __init__(self, w, btype, nf=32, deg=6, nc=20, informed_dim=None,
+                 learnable_alpha=False, init_alpha=0.01):
         super().__init__(); self.w = w; self.btype = btype
         if btype == 'fourier': self.nf = nf; self.idim = 1 + 2*nf
         elif btype == 'poly': self.deg = deg; self.idim = deg + 1
@@ -93,6 +94,21 @@ class HyperTrunk(nn.Module):
         self.full_idim = self.idim + self.informed_dim
         self.pc = self.full_idim * w + w
         self.odim = self.pc + w
+
+        # Hypernet output scale α. Default: fixed 0.01 (legacy behavior).
+        # With learnable_alpha=True, parameterize as α = exp(log_alpha) and
+        # init log_alpha = log(init_alpha) so the model starts identical to
+        # the fixed-α version (= warm-start safe).
+        self.learnable_alpha = bool(learnable_alpha)
+        if self.learnable_alpha:
+            self.log_alpha = nn.Parameter(torch.tensor(math.log(init_alpha)))
+        else:
+            self.register_buffer('log_alpha', torch.tensor(math.log(init_alpha)),
+                                 persistent=False)
+
+    @property
+    def alpha(self):
+        return torch.exp(self.log_alpha)
 
     def base_feat(self, t):
         t = t.unsqueeze(-1) if t.dim() == 1 else t
@@ -118,7 +134,8 @@ def hyper_fwd(trunk, t_flat, head_out, iq):
     base = trunk.base_feat(t_flat)
     nq = base.shape[0] // B
     full = torch.cat([base.view(B, nq, trunk.idim), iq], dim=-1)
-    tp = head_out[:, :trunk.pc] * 0.01
+    # Hypernet output scaling — α is learnable (or fixed 0.01) per trunk.
+    tp = head_out[:, :trunk.pc] * trunk.alpha
     W = tp[:, :trunk.full_idim*trunk.w].view(B, trunk.full_idim, trunk.w)
     b = tp[:, trunk.full_idim*trunk.w:].view(B, trunk.w)
     Phi = F.gelu(torch.bmm(full, W) + b.unsqueeze(1))
@@ -131,7 +148,11 @@ class FixedTrunk(nn.Module):
     Fixed trunk: basis features + fixed learnable MLP (no hypernetwork).
     Context z is combined via inner product with MLP output (classic DeepONet style).
     """
-    def __init__(self, w, btype, d_model=512, hidden=128, nf=32, deg=6, nc=20, informed_dim=None):
+    def __init__(self, w, btype, d_model=512, hidden=128, nf=32, deg=6, nc=20,
+                 informed_dim=None, learnable_alpha=False, init_alpha=0.01):
+        # learnable_alpha/init_alpha: ignored (FixedTrunk has no hypernet scaling).
+        # Accepted for kwarg-compatibility with HyperTrunk so callers can share **idim_kw.
+        _ = (learnable_alpha, init_alpha)
         super().__init__()
         self.w = w; self.btype = btype; self.is_fixed = True
         if btype == 'fourier': self.nf = nf; self.idim = 1 + 2*nf
