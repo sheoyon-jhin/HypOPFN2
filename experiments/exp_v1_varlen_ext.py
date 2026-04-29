@@ -919,9 +919,10 @@ if __name__ == '__main__':
                    help='1: use all FixedTrunks (no HyperNet, no 0.01 scaling issue)')
     p.add_argument('--use_cheby', type=int, default=0,
                    help='1: replace HyperTrunk poly with Chebyshev T_n basis (shifted to t-1)')
-    p.add_argument('--learnable_alpha', type=int, default=0,
-                   help='1: make hypernet output scale α learnable per HyperTrunk '
-                        '(initialized to 0.01 = legacy behavior). Adds one scalar param per trunk.')
+    p.add_argument('--learnable_alpha', type=int, default=1,
+                   help='1 (default): hypernet output scale α is learnable per HyperTrunk, '
+                        'initialized to 0.01 (= legacy behavior at step 0, then learns away). '
+                        'Set 0 only when reproducing legacy fixed-α runs.')
     p.add_argument('--use_wavelet', type=int, default=0,
                    help='1: replace 3rd trunk (rbf) with Morlet-style wavelet basis '
                         '(8 scales × 8 translations, ψ(τ)=exp(-τ²/2)·cos(5τ)).')

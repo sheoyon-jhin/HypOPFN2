@@ -1,6 +1,12 @@
 # HypOPFN2 — New Server Instructions
 
 **Goal:** 100% LOTSA fresh pretraining of 3 models (hyper4, decomp, hyper4+short).
+
+**Note (2026-04-29 update):** `--learnable_alpha` is now default ON (=1). The
+hypernet output scale α used to be hard-coded to 0.01 — making it learnable
+yields ~1.5% MSE improvement overall (Weather -9%, ETT -2%) and the trained α
+values land in [0.05, 0.5], i.e. 5–50× larger than the old constant. No flag
+needed; runs automatically include this fix.
 **Hardware:** 2× A100 + 4 TB disk + 80 GB RAM.
 **Approach:** No checkpoint transfer — fresh training from scratch, code pulled from GitHub.
 
