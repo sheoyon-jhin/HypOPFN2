@@ -782,6 +782,10 @@ def train_varlen(model, datasets, save_path, max_seq_len, seq_len_choices,
         avg = float(np.mean(losses))
         elapsed = time.time() - t0
         print(f'Epoch {epoch+1}/{epochs}: loss={avg:.4f} ({elapsed:.0f}s)')
+        # Per-epoch snapshot (always saved, separate file) for downstream analysis
+        ep_path = save_path.replace('.pth', f'_ep{epoch+1}.pth')
+        torch.save(model.state_dict(), ep_path)
+        print(f'  [epoch snapshot] {ep_path}')
         if avg < best_loss:
             best_loss = avg
             torch.save(model.state_dict(), save_path)
