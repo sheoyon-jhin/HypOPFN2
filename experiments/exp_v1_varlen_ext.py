@@ -464,6 +464,14 @@ class OperatorModelVarLen(nn.Module):
         else:
             z_list = [z, z, z]
 
+        # BUG FIX (2026-04-30): if there are >3 trunks (e.g. highfreq Fourier or
+        # highfreq2 Fourier added via --highfreq_nf / --highfreq2_nf), pad z_list
+        # so every trunk receives a context vector. Previously zip() truncated to
+        # len(z_list)=3, silently dropping any trunk beyond index 2 — turning every
+        # "4-trunk" / "5-trunk" model into a 3-trunk model with dead parameters.
+        while len(z_list) < len(self.trunks):
+            z_list.append(z)
+
         trunk_outs = []
         for zi, trunk, head, bias in zip(z_list, self.trunks, self.heads, self.biases):
             if getattr(trunk, 'is_fixed', False):
@@ -532,6 +540,10 @@ def collate_batch_varlen(windows, seq_len, n_query=64, mr=0.375, max_horizon_mul
             this_mr = _mask_rate()
             mask = np.random.rand(seq_len) > this_mr
             mask_idx = np.where(~mask)[0]
+            # BUG FIX (2026-04-30): query positions must lie in the real (non-padded)
+            # region. Otherwise full_clean[idx]=0 (padded) is used as target → model
+            # learns to predict 0 at padded positions.
+            mask_idx = mask_idx[mask_idx < real_len]
             if len(mask_idx) == 0:
                 mask[0] = False; mask_idx = np.array([0])
             if len(mask_idx) >= n_query:
@@ -582,6 +594,8 @@ def collate_batch_varlen(windows, seq_len, n_query=64, mr=0.375, max_horizon_mul
             this_mr = _mask_rate()
             mask = np.random.rand(seq_len) > this_mr
             imp_idx = np.where(~mask)[0]
+            # BUG FIX: keep query indices in real (non-padded) region only.
+            imp_idx = imp_idx[imp_idx < real_len]
             if len(imp_idx) == 0:
                 mask[0] = False; imp_idx = np.array([0])
             if len(imp_idx) >= n_query:
