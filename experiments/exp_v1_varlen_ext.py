@@ -673,7 +673,7 @@ def train_varlen(model, datasets, save_path, max_seq_len, seq_len_choices,
                  use_huber=False, huber_delta=1.0,
                  unified_task=False, var_mask=False, short_pred=False,
                  resume_from=None, start_epoch=0, amp=False,
-                 mask_recon_only=False):
+                 mask_recon_only=False, mask_rate=0.375):
     n_params = sum(p.numel() for p in model.parameters())
     combined = ConcatDataset(datasets)
 
@@ -682,7 +682,7 @@ def train_varlen(model, datasets, save_path, max_seq_len, seq_len_choices,
     def _collate(batch_windows):
         seq_len_b = int(np.random.choice(seq_len_choices))
         return collate_batch_varlen(
-            batch_windows, seq_len=seq_len_b, n_query=n_query,
+            batch_windows, seq_len=seq_len_b, n_query=n_query, mr=mask_rate,
             return_dense=use_spec, max_horizon_mult=max_horizon_mult,
             unified_task=unified_task, var_mask=var_mask,
             short_pred=short_pred, mask_recon_only=mask_recon_only)
@@ -900,6 +900,8 @@ if __name__ == '__main__':
                    help='CauKer cache base name (lookup at dataset/cauker_cache/{name}.dat).')
     p.add_argument('--mask_recon_only', type=int, default=0,
                    help='If 1, use masked reconstruction as sole pretrain objective (FeDaL/MAE-style). Disables forecast pretrain.')
+    p.add_argument('--mask_rate', type=float, default=0.375,
+                   help='Fixed mask rate for mask_recon_only / imputation (default 0.375 = 37.5%%). FeDaL uses 0.75.')
     p.add_argument('--lr', type=float, default=3e-4,
                    help='Learning rate (default 3e-4). Scale linearly with batch size.')
     p.add_argument('--batch_size', type=int, default=64,
@@ -1073,7 +1075,8 @@ if __name__ == '__main__':
                             resume_from=resume_from,
                             start_epoch=args.start_epoch,
                             amp=bool(args.amp),
-                            mask_recon_only=bool(args.mask_recon_only))
+                            mask_recon_only=bool(args.mask_recon_only),
+                            mask_rate=args.mask_rate)
 
     if args.eval_after:
         print('\n' + '=' * 60)
