@@ -773,6 +773,11 @@ def train_varlen(model, datasets, save_path, max_seq_len, seq_len_choices,
             losses.append(mse.item())
             if (i + 1) % 500 == 0:
                 print(f'  iter {i+1}/{len(dl)}: loss={np.mean(losses[-500:]):.4f}')
+            # Resilience: save mid-epoch every 5000 iters so crashes don't lose
+            # everything when 1 epoch = many tens of thousands of iters.
+            if (i + 1) % 5000 == 0:
+                torch.save(model.state_dict(), save_path)
+                print(f'  [periodic save @ iter {i+1}/{len(dl)}, recent_loss={np.mean(losses[-500:]):.4f}]')
         scheduler.step()
         avg = float(np.mean(losses))
         elapsed = time.time() - t0
